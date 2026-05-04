@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Archery Scorecard</title>
+
+<link rel="manifest" href="manifest.json">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+body { margin:0; font-family:system-ui; background:#111; color:white; }
+
+header {
+  display:flex; justify-content:space-between;
+  background:#000; padding:10px;
+  border-bottom:2px solid #333;
+}
+
+.container { padding:10px; }
+
+button {
+  padding:10px;
+  border:none;
+  border-radius:8px;
+  background:#333;
+  color:white;
+  font-size:14px;
+  margin:3px;
+}
+
+.modeBar {
+  display:flex;
+  gap:5px;
+}
+
+.activeMode {
+  background:#0a84ff;
+}
+
+.panel {
+  background:#1c1c1c;
+  padding:10px;
+  border-radius:10px;
+  margin-top:10px;
+}
+
+.hidden { display:none; }
+
+textarea {
+  width:100%;
+  min-height:60px;
+  background:#111;
+  color:white;
+  border:1px solid #333;
+  border-radius:6px;
+}
+
+table {
+  width:100%;
+  border-collapse:collapse;
+  margin-top:10px;
+  font-size:13px;
+}
+
+td,th {
+  border:1px solid #444;
+  padding:6px;
+  text-align:center;
+}
+
+th { background:#222; }
+
+select {
+  width:100%;
+  padding:6px;
+  margin:4px 0;
+  border-radius:6px;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <div>
+    🏹 <span id="modeLabel">Simple Mode</span><br>
+    Target: <span id="targetNum"></span>/20
+  </div>
+  <div id="date"></div>
+</header>
+
+<div class="container">
+
+<!-- MODE SWITCH -->
+<div class="modeBar">
+  <button id="btnSimple">Simple</button>
+  <button id="btnFull">Full</button>
+</div>
+
+<!-- MAIN ACTIONS -->
+<div>
+  <button id="btnNew">+ New Round</button>
+  <button id="btnManage">Manage Archers</button>
+  <button id="btnOptions">Options</button>
+  <button id="btnPDF">Export PDF</button>
+  <button id="btnReset">RESET</button>
+</div>
+
+<!-- SIMPLE MODE -->
+<div id="simpleMode">
+  <h3 id="archerSimple"></h3>
+  <h4 id="arrowSimple"></h4>
+  <div id="simpleButtons"></div>
+  <button id="btnUndoSimple">Undo</button>
+</div>
+
+<!-- FULL MODE -->
+<div id="fullMode" class="hidden">
+  <h3 id="archerFull"></h3>
+  <h4 id="arrowFull"></h4>
+  <div id="fullButtons"></div>
+  <button id="btnUndoFull">Undo</button>
+</div>
+
+<div id="grid"></div>
+
+<!-- OPTIONS -->
+<div id="optionsPanel" class="panel hidden">
+  <h3>Options</h3>
+
+  <b>Divisions</b>
+  <textarea id="divisionsBox"></textarea>
+
+  <b>Grades</b>
+  <textarea id="gradesBox"></textarea>
+
+  <b>Pegs</b>
+  <textarea id="pegsBox"></textarea>
+
+  <button id="btnSaveOptions">Save</button>
+  <button id="btnCloseOptions">Close</button>
+</div>
+
+<!-- MANAGE -->
+<div id="managePanel" class="panel hidden">
+  <h3>Manage Archers</h3>
+  <div id="manageList"></div>
+  <button id="btnCloseManage">Close</button>
+</div>
+
+<div id="summary" class="panel hidden"></div>
+
+</div>
+
+<script>
+/* =======================
+   SAFE STATE INIT
+======================= */
+
+const arrows=[[20,18,16],[14,12,10],[8,6,4]];
+
+let app = JSON.parse(localStorage.getItem("archery_ios_v13"));
+
+if(!app){
+  app={
+    mode:"simple",
+    rounds:[],
+    active:0,
+    settings:{
+      divisions:["Recurve","Compound","Barebow","Longbow"],
+      grades:["A","B","C","Junior","Senior"],
+      pegs:["Red","Green","Yellow"]
+    }
+  };
+  createRound();
+}
+
+let history=[];
+
+function round(){return app.rounds[app.active];}
+function save(){localStorage.setItem("archery_ios_v13",JSON.stringify(app));}
+
+/* =======================
+   MODE SWITCH (IMPORTANT FOR iPHONE)
+======================= */
+
+function setMode(m){
+  app.mode=m;
+
+  document.getElementById("simpleMode").classList.toggle("hidden",m!=="simple");
+  document.getElementById("fullMode").classList.toggle("hidden",m!=="full");
+
+  document.getElementById("modeLabel").innerText =
+    m==="simple" ? "Simple Mode" : "Full Mode";
+
+  save(); render();
+}
+
+/* =======================
+   EVENTS (NO INLINE HANDLERS)
+======================= */
+
+function bindUI(){
+
+  document.getElementById("btnSimple").onclick=()=>setMode("simple");
+  document.getElementById("btnFull").onclick=()=>setMode("full");
+
+  document.getElementById("btnNew").onclick=createRound;
+  document.getElementById("btnManage").onclick=openManage;
+  document.getElementById("btnOptions").onclick=openOptions;
+  document.getElementById("btnPDF").onclick=exportPDF;
+  document.getElementById("btnReset").onclick=resetAll;
+
+  document.getElementById("btnUndoSimple").onclick=undo;
+  document.getElementById("btnUndoFull").onclick=undo;
+
+  document.getElementById("btnSaveOptions").onclick=saveOptions;
+  document.getElementById("btnCloseOptions").onclick=closeOptions;
+
+  document.getElementById("btnCloseManage").onclick=closeManage;
+}
+
+/* =======================
+   OPTIONS (SAFE)
+======================= */
+
+function openOptions(){
+  document.getElementById("optionsPanel").classList.remove("hidden");
+
+  divisionsBox.value=app.settings.divisions.join("\n");
+  gradesBox.value=app.settings.grades.join("\n");
+  pegsBox.value=app.settings.pegs.join("\n");
+}
+
+function closeOptions(){
+  document.getElementById("optionsPanel").classList.add("hidden");
+}
+
+function saveOptions(){
+  app.settings.divisions=divisionsBox.value.split("\n").filter(Boolean);
+  app.settings.grades=gradesBox.value.split("\n").filter(Boolean);
+  app.settings.pegs=pegsBox.value.split("\n").filter(Boolean);
+  save();
+  closeOptions();
+  render();
+}
+
+/* =======================
+   RESET
+======================= */
+
+function resetAll(){
+  if(!confirm("Reset all data?"))return;
+  localStorage.removeItem("archery_ios_v13");
+  location.reload();
+}
+
+/* =======================
+   ROUND SYSTEM
+======================= */
+
+function createRound(){
+  let n=parseInt(prompt("Archers (1-4):","4"))||4;
+  let a=[];
+
+  for(let i=0;i<n;i++){
+    a.push({
+      name:prompt("Name "+(i+1),String.fromCharCode(65+i)),
+      division:app.settings.divisions[0],
+      grade:app.settings.grades[0],
+      peg:app.settings.pegs[0],
+      scores:Array(20).fill(null)
+    });
+  }
+
+  app.rounds.push({
+    name:"Round "+(app.rounds.length+1),
+    archers:a,
+    target:0,
+    currentArcher:0,
+    arrow:0
+  });
+
+  app.active=app.rounds.length-1;
+  save();render();
+}
+
+function current(){return round().archers[round().currentArcher];}
+
+/* =======================
+   SCORING
+======================= */
+
+function shoot(v){
+  let r=round();
+  let a=current();
+
+  history.push({arch:r.currentArcher,t:r.target,a:r.arrow,prev:a.scores[r.target]});
+
+  if(v>0){
+    a.scores[r.target]=v;
+    next();
+  }else{
+    if(r.arrow<2) r.arrow++;
+    else{a.scores[r.target]=0;next();}
+  }
+
+  save();render();
+}
+
+function undo(){
+  if(!history.length)return;
+
+  let h=history.pop();
+  let r=app.rounds[app.active];
+  let a=r.archers[h.arch];
+
+  a.scores[h.t]=h.prev;
+
+  r.currentArcher=h.arch;
+  r.target=h.t;
+  r.arrow=h.a;
+
+  save();render();
+}
+
+function next(){
+  let r=round();
+
+  if(r.currentArcher<r.archers.length-1){
+    r.currentArcher++;r.arrow=0;
+  }else{
+    r.currentArcher=0;
+    if(r.target<19){r.target++;r.arrow=0;}
+    else showSummary();
+  }
+}
+
+/* =======================
+   RENDER (SAFE FOR iOS)
+======================= */
+
+function render(){
+  let r=round();
+  let a=current();
+
+  targetNum.innerText=r.target+1;
+  date.innerText=new Date().toLocaleDateString();
+
+  archerSimple.innerText=a.name;
+  archerFull.innerText=a.name;
+
+  arrowSimple.innerText="Arrow "+(r.arrow+1);
+  arrowFull.innerText="Arrow "+(r.arrow+1);
+
+  simpleButtons.innerHTML="";
+  fullButtons.innerHTML="";
+
+  arrows[r.arrow].forEach(v=>{
+    let b=document.createElement("button");
+    b.innerText=v;
+    b.onclick=()=>shoot(v);
+    simpleButtons.appendChild(b);
+
+    let b2=document.createElement("button");
+    b2.innerText=v;
+    b2.onclick=()=>shoot(v);
+    fullButtons.appendChild(b2);
+  });
+
+  let m=document.createElement("button");
+  m.innerText="M";
+  m.onclick=()=>shoot(0);
+
+  simpleButtons.appendChild(m.cloneNode(true));
+  fullButtons.appendChild(m);
+
+  renderGrid();
+}
+
+function renderGrid(){
+  let r=round();
+  let h="<table><tr><th>T</th>";
+
+  r.archers.forEach(a=>h+="<th>"+a.name+"</th>");
+  h+="</tr>";
+
+  let totals=Array(r.archers.length).fill(0);
+
+  for(let i=0;i<20;i++){
+    h+="<tr><td>"+(i+1)+"</td>";
+
+    r.archers.forEach((a,ai)=>{
+      let v=a.scores[i]||"";
+      if(v)totals[ai]+=v;
+      h+="<td>"+v+"</td>";
+    });
+
+    h+="</tr>";
+  }
+
+  h+="<tr><th>Total</th>";
+  totals.forEach(t=>h+="<th>"+t+"</th>");
+  h+="</tr></table>";
+
+  grid.innerHTML=h;
+}
+
+/* =======================
+   MANAGE
+======================= */
+
+function openManage(){
+  let h="";
+
+  round().archers.forEach((a,i)=>{
+    h+=`
+      <div class="panel">
+        <b>${a.name}</b>
+
+        <select onchange="update(${i},'division',this.value)">
+          ${app.settings.divisions.map(v=>`<option ${a.division==v?"selected":""}>${v}</option>`).join("")}
+        </select>
+
+        <select onchange="update(${i},'grade',this.value)">
+          ${app.settings.grades.map(v=>`<option ${a.grade==v?"selected":""}>${v}</option>`).join("")}
+        </select>
+
+        <select onchange="update(${i},'peg',this.value)">
+          ${app.settings.pegs.map(v=>`<option ${a.peg==v?"selected":""}>${v}</option>`).join("")}
+        </select>
+      </div>
+    `;
+  });
+
+  manageList.innerHTML=h;
+  managePanel.classList.remove("hidden");
+}
+
+function closeManage(){
+  managePanel.classList.add("hidden");
+}
+
+function update(i,f,v){
+  round().archers[i][f]=v;
+  save();render();
+}
+
+/* =======================
+   PDF (SAFE)
+======================= */
+
+function exportPDF(){
+  const { jsPDF } = window.jspdf;
+  let doc=new jsPDF({orientation:"portrait"});
+
+  let r=round();
+
+  doc.text("Archery Scorecard",10,10);
+  doc.text(r.name,10,16);
+
+  let x=10,y=30,col=30;
+
+  doc.text("T",x,y);
+
+  r.archers.forEach((a,i)=>{
+    let cx=x+(i+1)*col;
+    doc.text(a.name,cx,y);
+  });
+
+  let totals=Array(r.archers.length).fill(0);
+  y+=20;
+
+  for(let i=0;i<20;i++){
+    doc.text(String(i+1),x,y);
+
+    r.archers.forEach((a,ai)=>{
+      let v=a.scores[i]||0;
+      totals[ai]+=v;
+      doc.text(String(v),x+(ai+1)*col,y);
+    });
+
+    y+=6;
+  }
+
+  y+=10;
+  doc.text("TOTAL",x,y);
+
+  r.archers.forEach((a,i)=>{
+    doc.text(String(totals[i]),x+(i+1)*col,y);
+  });
+
+  doc.save("scorecard.pdf");
+}
+
+/* =======================
+   SUMMARY
+======================= */
+
+function showSummary(){
+  summary.innerHTML="<h3>Finished</h3>";
+}
+
+/* =======================
+   SERVICE WORKER REGISTRATION
+======================= */
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/service-worker.js').catch(err => {
+    console.log('Service Worker registration failed:', err);
+  });
+}
+
+/* INIT */
+bindUI();
+render();
+
+setMode(app.mode);
+</script>
+
+</body>
+</html>
